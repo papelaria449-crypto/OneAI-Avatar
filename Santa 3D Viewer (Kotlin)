@@ -1,0 +1,278 @@
+# Android Studio — Santa 3D Viewer (Kotlin)
+
+Este projeto mostra como carregar e visualizar um modelo 3D (GLB/GLTF) do Papai Noel em uma Activity usando **SceneView** (SceneView/Sceneform successor que usa Google Filament). O foco é **visualização 3D** (sem voz, sem IA) — você poderá girar, dar zoom e mover a câmera.
+
+---
+
+## O que inclui (arquivos principais)
+
+- `build.gradle` (project-level) — configurações mínimas
+- `app/build.gradle` (module) — dependências (SceneView)
+- `AndroidManifest.xml` — permissões mínimas
+- `res/layout/activity_main.xml` — layout com `SceneView`
+- `src/main/java/com/example/santaview/MainActivity.kt` — Activity que carrega o modelo
+- instruções: onde colocar `santa.glb` (colocar em `app/src/main/assets/models/santa.glb`)
+
+---
+
+## Instruções rápidas
+
+1. Crie um novo projeto Android (Empty Activity) em Kotlin no Android Studio.
+2. Substitua os arquivos abaixo (ou copie o conteúdo apropriado).
+3. No `app/src/main/assets/` crie a pasta `models` e coloque seu `santa.glb` (ou outro GLB). Ex: `app/src/main/assets/models/santa.glb`.
+4. Sync/Build e rode no dispositivo (ou emulador com suporte a rendering). SceneView usa Filament; em emulador a performance pode variar.
+
+---
+
+## `settings.gradle` (exemplo mínimo)
+
+```gradle
+rootProject.name = "Santa3DViewer"
+include ':app'
+```
+
+---
+
+## `build.gradle` (project)
+
+```gradle
+// Top-level build file
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.1.1"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+```
+
+---
+
+## `app/build.gradle` (module)
+
+```gradle
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace "com.example.santaview"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.santaview"
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildFeatures {
+        viewBinding true
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.10"
+    implementation 'androidx.core:core-ktx:1.10.1'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.9.0'
+
+    // SceneView (3D + AR with Filament) - versão estável disponível no Maven Central
+    implementation 'io.github.sceneview:sceneview:2.3.0'
+
+    // Coroutines (recomendada para carregamento assíncrono)
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+}
+```
+
+---
+
+## `AndroidManifest.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest package="com.example.santaview"
+    xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Permissão de câmera NÃO é obrigatória para 3D-only, mas necessária caso ative AR no futuro -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Santa 3D Viewer"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+```
+
+---
+
+## `res/layout/activity_main.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
+
+    <!-- SceneView para render 3D (pode usar ArSceneView/SceneView conforme desejar) -->
+    <io.github.sceneview.SceneView
+        android:id="@+id/sceneView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Overlay: botão fechar / instruções (opcional) -->
+    <ImageButton
+        android:id="@+id/closeButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_margin="16dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Fechar"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:layout_gravity="top|end" />
+
+</FrameLayout>
+```
+
+---
+
+## `src/main/java/com/example/santaview/MainActivity.kt`
+
+```kotlin
+package com.example.santaview
+
+import android.os.Bundle
+import android.util.Log
+import android.view.View
+import androidx.appcompat.app.AppCompatActivity
+import io.github.sceneview.SceneView
+import io.github.sceneview.loaders.loadModelAsync
+import io.github.sceneview.node.ModelNode
+import kotlinx.coroutines.*
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var sceneView: SceneView
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main + job)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        sceneView = findViewById(R.id.sceneView)
+
+        // Carrega o modelo GLB da pasta assets/models/santa.glb
+        // Caminho relativo aceito: "models/santa.glb"
+        val modelPath = "models/santa.glb"
+
+        // show a simple progress overlay if quiser (não incluído aqui)
+
+        // Carregamento assíncrono do modelo (coroutine)
+        sceneView.loadModelAsync(modelPath) { model ->
+            if (model == null) {
+                Log.e("MainActivity", "Erro ao carregar modelo: modelo nulo")
+                return@loadModelAsync
+            }
+
+            // Cria um ModelNode a partir do Model carregado e adiciona à cena
+            val modelNode = ModelNode(model)
+
+            // Ajustes finos: posição, escala e rotação para ficar centralizado e com tamanho adequado
+            modelNode.position = floatArrayOf(0f, 0f, 0f)
+            modelNode.scale = floatArrayOf(1f, 1f, 1f) // ajuste conforme seu modelo
+
+            // Adiciona ao root da cena
+            sceneView.addChild(modelNode)
+
+            // Opcional: centraliza a câmera para focar no novo nó
+            sceneView.cameraController?.let { controller ->
+                controller.setTarget(modelNode.position)
+            }
+        }
+
+        // Botão fechar (opcional)
+        findViewById<View>(R.id.closeButton).setOnClickListener { finish() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        sceneView.onResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sceneView.onPause()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        job.cancel()
+        sceneView.destroy()
+    }
+}
+```
+
+---
+
+## Observações e dicas
+
+- **Onde colocar o arquivo GLB**: `app/src/main/assets/models/santa.glb` (crie as pastas `assets/models`).
+- **Modelos GLB com animações**: SceneView suporta animações (se seu GLB tiver). Você pode consultar a API `model.animations` e rodar `modelNode.playAnimation(...)`.
+- **Escala e pivô**: dependendo de como o modelo foi exportado (unidades em metros, centímetros, etc.), ajuste `modelNode.scale` e/ou recenter (use Blender para ajustar pivô se necessário).
+- **Versões**: use `mavenCentral()` e a versão atual do `io.github.sceneview:sceneview` (2.x no exemplo). Se quiser eu atualizo a versão para a mais recente enquanto você estiver pronto.
+- **Fallback sem AR**: este exemplo usa `SceneView` para 3D-only. Se quiser AR (colocar o Papai Noel no mundo real), trocamos para `io.github.sceneview:arsceneview` e adicionamos `ArSession` + permissões.
+
+---
+
+## Referências úteis (consulta que usei)
+
+- SceneView (Sceneform successor / Filament): https://github.com/SceneView/sceneview-android
+- API `loadModelAsync` para carregar GLB/gltf a partir de `assets/models/...`
+- Documentação Filament / SceneView samples
+
+---
+
+Se quiser, eu já adapto este projeto para:
+- AR (colocar o Papai Noel no mundo real);
+- Fazer o Papai Noel **falar** (texto → fala) e sincronizar movimento de boca (usando Android TTS + blendshapes se o modelo tiver);
+- Transformar em um **app interativo** com botões, troca de roupas, etc.
+
+Me diz qual dessas opções quer que eu gere a seguir e eu já preparo (código + instruções).
